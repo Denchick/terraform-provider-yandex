@@ -10,11 +10,20 @@ endif
 
 SWEEP_DIR?=./yandex
 
+HOSTNAME=registry.terraform.io
+NAME=yandex
+NAMESPACE=yandex-cloud
+VERSION=0.99.0
+OS_ARCH=darwin_amd64
 
 default: build
 
 build: fmtcheck
 	go install
+
+install: build
+	mkdir -p ~/.terraform.d/plugins/${HOSTNAME}/${NAMESPACE}/${NAME}/${VERSION}/${OS_ARCH}
+	mv ${GOPATH}/bin/terraform-provider-yandex ~/.terraform.d/plugins/${HOSTNAME}/${NAMESPACE}/${NAME}/${VERSION}/${OS_ARCH}
 
 sweep:
 	@echo "WARNING: This will destroy infrastructure. Use only in development accounts.";
