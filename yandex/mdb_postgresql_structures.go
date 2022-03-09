@@ -316,7 +316,7 @@ type pgHostInfo struct {
 	newReplicationSourceName string
 
 	// isNew is true when host is present in target set (and shouldn't be removed)
-	isNew bool
+	inTargetSet bool
 
 	rowNumber int
 }
@@ -343,28 +343,14 @@ func interfaceToInt(i interface{}) int {
 	return 0
 }
 
-func sortPGHostsInfo(hostsInfo map[string]*pgHostInfo) []*pgHostInfo {
-	orderedHostsInfo := make([]*pgHostInfo, 0, len(hostsInfo))
-
-	for _, hostInfo := range hostsInfo {
-		orderedHostsInfo = append(orderedHostsInfo, hostInfo)
-	}
-
-	sort.Slice(orderedHostsInfo, func(i, j int) bool {
-		return orderedHostsInfo[i].rowNumber < orderedHostsInfo[j].rowNumber
-	})
-
-	return orderedHostsInfo
-}
-
 func loadNewPgHostsInfo(d *schema.ResourceData, newHosts []interface{}, isUpdate bool) (hostsInfo []*pgHostInfo, haveHostWithName bool, err error) {
 	hostsInfo = make([]*pgHostInfo, 0)
 	uniqueNames := make(map[string]struct{})
 
 	haveHostWithoutName := false
 
-	for i, hostNewInfo := range newHosts {
-		hni := hostNewInfo.(map[string]interface{})
+	for i, newHostInfo := range newHosts {
+		hni := newHostInfo.(map[string]interface{})
 		name := interfaceToString(hni["name"])
 
 		if name == "" {
@@ -652,7 +638,7 @@ func comparePGHostsInfo(d *schema.ResourceData, currentHosts []*postgresql.Host,
 				existHostInfo.newReplicationSourceName = newHostsInfo[i].newReplicationSourceName
 				existHostInfo.newPriority = newHostsInfo[i].newPriority
 				existHostInfo.newAssignPublicIP = newHostsInfo[i].newAssignPublicIP
-				existHostInfo.isNew = true
+				existHostInfo.inTargetSet = true
 
 				nameToHost[existHostInfo.name] = existHostInfo.fqdn
 			} else {
@@ -705,10 +691,8 @@ func comparePGHostsInfo(d *schema.ResourceData, currentHosts []*postgresql.Host,
 	for i, newHostInfo := range newHostsInfo {
 		if existHostFqdn, ok := compareMap[i]; ok {
 			existHostInfo := existHostsInfo[existHostFqdn]
-
 			existHostInfo.rowNumber = newHostsInfo[i].rowNumber
-
-			existHostInfo.isNew = true
+			existHostInfo.inTargetSet = true
 		} else {
 			createHostsInfoPrepare = append(createHostsInfoPrepare, newHostInfo)
 		}
@@ -749,8 +733,16 @@ func flattenPGHosts(d *schema.ResourceData, hs []*postgresql.Host, isDataSource 
 }
 
 func flattenPGHostsFromHostInfo(hostsInfo map[string]*pgHostInfo, isDataSource bool) ([]map[string]interface{}, string) {
-
-	orderedHostsInfo := sortPGHostsInfo(hostsInfo)
+	orderedHostsInfo := make([]*pgHostInfo, 0, len(hostsInfo))
+	for _, hostInfo := range hostsInfo {
+		orderedHostsInfo = append(orderedHostsInfo, hostInfo)
+	}
+	sort.Slice(orderedHostsInfo, func(i, j int) bool {
+		if orderedHostsInfo[i].inTargetSet == orderedHostsInfo[j].inTargetSet {
+			return orderedHostsInfo[i].rowNumber < orderedHostsInfo[j].rowNumber
+		}
+		return orderedHostsInfo[i].inTargetSet
+	})
 
 	var hostMasterName string
 	hosts := []map[string]interface{}{}
@@ -774,6 +766,7 @@ func flattenPGHostsFromHostInfo(hostsInfo map[string]*pgHostInfo, isDataSource b
 		m["priority"] = hostInfo.oldPriority
 		m["replication_source"] = hostInfo.oldReplicationSource
 		if !isDataSource {
+			// m["name"] = hostInfo.name
 			m["replication_source_name"] = hostInfo.oldReplicationSourceName
 		}
 

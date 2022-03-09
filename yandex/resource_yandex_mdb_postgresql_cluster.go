@@ -1088,15 +1088,24 @@ func updatePGClusterUsersUpdateAndDrop(d *schema.ResourceData, meta interface{})
 }
 
 func updatePGClusterHosts(d *schema.ResourceData, meta interface{}) error {
+	// Ideas:
+	// 1. In order to do it safely for clients: firstly add new hosts and only then delete unneeded hosts
+	// 2. Batch Add/Update operations are not supported, so we should update hosts one by one
+	//    It may produce issues with cascade replicas: we should change replication-source in such way, that
+	//    there is no attempts to create replication loop
+	//    Solution: update HA-replicas first, then use BFS (using `comparePGHostsInfoResult.hierarchyExists`)
+
 	config := meta.(*Config)
 	ctx, cancel := config.ContextWithTimeout(d.Timeout(schema.TimeoutUpdate))
 	defer cancel()
 
+	// Step 1: Add new hosts (as HA-hosts):
 	err := createPGClusterHosts(ctx, config, d)
 	if err != nil {
 		return err
 	}
 
+	// Step 2: update hosts:
 	currHosts, err := listPGHosts(ctx, config, d.Id())
 	if err != nil {
 		return err
@@ -1107,12 +1116,8 @@ func updatePGClusterHosts(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	hostsToDelete := []string{}
-
 	for _, hostInfo := range compareHostsInfo.hostsInfo {
-		if !hostInfo.isNew {
-			hostsToDelete = append(hostsToDelete, hostInfo.fqdn)
-		} else if compareHostsInfo.haveHostWithName {
+		if compareHostsInfo.haveHostWithName {
 			var maskPaths []string
 			if hostInfo.oldPriority != hostInfo.newPriority {
 				maskPaths = append(maskPaths, "priority")
@@ -1137,8 +1142,14 @@ func updatePGClusterHosts(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	if err := deletePGHosts(ctx, config, d, hostsToDelete); err != nil {
-		return err
+	// Step 3: delete hosts:
+	for _, hostInfo := range compareHostsInfo.hostsInfo {
+		if !hostInfo.inTargetSet {
+			log.Printf("[DEBUG] Deleting host %v", hostInfo.fqdn)
+			if err := deletePGHost(ctx, config, d, hostInfo.fqdn); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
